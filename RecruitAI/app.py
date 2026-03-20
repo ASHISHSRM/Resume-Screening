@@ -40,7 +40,8 @@ def health():
         "app": "RecruitAI Resume Screening Backend",
         "version": "2.0",
         "tfidf_ready": True,
-        "supabase_configured": bool(SUPABASE_URL and SUPABASE_KEY)
+        "external_apis_needed": False,
+        "processing_mode": "Local (100% offline)"
     }), 200
 
 @app.route("/")
@@ -81,22 +82,94 @@ print("⏳ Initializing TF-IDF vectorizer...")
 VECTORIZER = TfidfVectorizer(max_features=500, stop_words='english')
 print("✅ TF-IDF vectorizer ready.")
 
-BERT_WEIGHT   = 0.40
-GEMINI_WEIGHT = 0.60
+# Scoring weights - 100% local processing, NO external APIs needed
+# Hybrid scoring: 75% Skill Match + 25% TF-IDF
+SKILL_WEIGHT = 0.75
+TFIDF_WEIGHT = 0.25
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
-
-if SUPABASE_URL and SUPABASE_KEY:
-    print("✅ Supabase credentials loaded from environment variables.")
-else:
-    print("⚠️  Supabase credentials not configured. App will use TF-IDF scoring only.")
+print("✅ All processing will be done locally (no external APIs required).")
+print("📊 Scoring: 75% Skill Match + 25% TF-IDF")
 
 print("=" * 60)
 print("✅ RecruitAI v2 Backend Ready!")
 print("=" * 60)
 
 SUPPORTED_EXTS = {"pdf", "docx", "doc", "txt"}
+
+# Technical Skills Database
+TECHNICAL_SKILLS = {
+    "programming": ["python", "javascript", "java", "c++", "c#", "php", "ruby", "go", "rust", "kotlin", "typescript"],
+    "frontend": ["html", "css", "react", "angular", "vue", "vuejs", "tailwind", "bootstrap", "webpack"],
+    "backend": ["django", "flask", "nodejs", "express", "spring", "fastapi", "graphql", "rest api"],
+    "databases": ["sql", "mysql", "postgresql", "mongodb", "firebase", "redis", "elasticsearch"],
+    "devops": ["docker", "kubernetes", "aws", "gcp", "azure", "jenkins", "gitlab", "github", "terraform"],
+    "ai_ml": ["machine learning", "deep learning", "tensorflow", "keras", "pytorch", "scikit-learn", "nlp", "cv"],
+    "tools": ["git", "jira", "agile", "scrum", "linux", "unix", "windows"],
+}
+
+SOFT_SKILLS = ["communication", "leadership", "teamwork", "problem solving", "project management", 
+               "time management", "collaboration", "analytical", "critical thinking", "adaptability"]
+
+def extract_skills(text: str) -> dict:
+    """Extract technical and soft skills from text"""
+    text_lower = text.lower()
+    found_technical = {}
+    found_soft = []
+    
+    for category, skills in TECHNICAL_SKILLS.items():
+        for skill in skills:
+            if skill in text_lower:
+                if category not in found_technical:
+                    found_technical[category] = []
+                found_technical[category].append(skill.upper())
+    
+    for skill in SOFT_SKILLS:
+        if skill in text_lower:
+            found_soft.append(skill.title())
+    
+    return {
+        "technical": found_technical,
+        "soft": list(set(found_soft))  # Remove duplicates
+    }
+
+def extract_requirements(jd: str) -> dict:
+    """Extract key requirements from JD"""
+    jd_lower = jd.lower()
+    
+    # Look for experience level
+    experience_level = "Not Specified"
+    if "internship" in jd_lower or "entry level" in jd_lower:
+        experience_level = "Entry Level"
+    elif "0-2 years" in jd_lower or "junior" in jd_lower:
+        experience_level = "Junior (0-2 years)"
+    elif "2-5 years" in jd_lower or "mid level" in jd_lower or "mid-level" in jd_lower:
+        experience_level = "Mid-Level (2-5 years)"
+    elif "5+ years" in jd_lower or "senior" in jd_lower:
+        experience_level = "Senior (5+ years)"
+    
+    required_skills = extract_skills(jd)
+    
+    return {
+        "experience_level": experience_level,
+        "required_skills": required_skills
+    }
+
+def calculate_skill_match(jd_skills: dict, resume_skills: dict) -> float:
+    """Calculate skill match percentage"""
+    jd_tech_skills = set()
+    for category_skills in jd_skills.get("technical", {}).values():
+        jd_tech_skills.update([s.lower() for s in category_skills])
+    
+    resume_tech_skills = set()
+    for category_skills in resume_skills.get("technical", {}).values():
+        resume_tech_skills.update([s.lower() for s in category_skills])
+    
+    if not jd_tech_skills:
+        return 50.0  # Neutral score if JD has no identified skills
+    
+    matched = len(jd_tech_skills.intersection(resume_tech_skills))
+    match_percentage = (matched / len(jd_tech_skills)) * 100
+    return min(100, match_percentage)
 
 def extract_text(file) -> str:
     """Extract text from PDF, DOCX, DOC, or TXT files"""
@@ -143,62 +216,57 @@ def compute_bert_score(jd: str, resume: str) -> int:
         print(f"[ERROR] compute_bert_score: {str(e)}")
         return 0
 
-def screen_with_supabase(jd: str, resume: str, candidate_name: str = "Unknown") -> dict:
-    """Enhanced screening with Supabase LLM (fallback to TF-IDF)"""
+def screen_resume(jd: str, resume: str, candidate_name: str = "Unknown") -> dict:
+    """Local resume screening with skill analysis (no external APIs required)"""
     
-    bert_score = compute_bert_score(jd, resume)
+    # TF-IDF semantic similarity score
+    tfidf_score = compute_bert_score(jd, resume)
     
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return {
-            "candidate_name": candidate_name,
-            "supabase_score": bert_score,
-            "key_strengths": [],
-            "key_gaps": [],
-            "final_recommendation": "Good Match" if bert_score >= 70 else "Moderate Match" if bert_score >= 50 else "Needs Review"
-        }
+    # Extract requirements and skills
+    jd_requirements = extract_requirements(jd)
+    jd_skills = jd_requirements["required_skills"]
+    resume_skills = extract_skills(resume)
     
-    try:
-        payload = {
-            "model": "gpt-4",
-            "messages": [{
-                "role": "user",
-                "content": f"Resume Quality Score (0-100) based on JD:\n\nJD:\n{jd[:500]}\n\nResume:\n{resume[:500]}\n\nProvide only a numeric score and brief assessment."
-            }],
-            "max_tokens": 100
-        }
-        
-        headers = {
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        response = requests.post(
-            f"{SUPABASE_URL}/functions/v1/screen",
-            json=payload,
-            headers=headers,
-            timeout=5
-        )
-        
-        if response.status_code == 200:
-            result = response.json()
-            supabase_score = int(result.get("score", bert_score))
-        else:
-            supabase_score = bert_score
+    # Calculate skill match percentage
+    skill_match = calculate_skill_match(jd_skills, resume_skills)
     
-    except Exception as e:
-        print(f"[SUPABASE ERROR] {str(e)}")
-        supabase_score = bert_score
+    # Identify strengths and gaps
+    jd_tech_skills = set()
+    for category_skills in jd_skills.get("technical", {}).values():
+        jd_tech_skills.update([s.lower() for s in category_skills])
+    
+    resume_tech_skills = set()
+    for category_skills in resume_skills.get("technical", {}).values():
+        resume_tech_skills.update([s.lower() for s in category_skills])
+    
+    strengths = list(jd_tech_skills.intersection(resume_tech_skills))
+    gaps = list(jd_tech_skills - resume_tech_skills)
+    
+    # Hybrid score: 75% Skill Match + 25% TF-IDF
+    combined_score = (skill_match * SKILL_WEIGHT) + (tfidf_score * TFIDF_WEIGHT)
+    
+    # Classification: Strong Hire (>=75), Mid Hire (60-75), No Hire (<60)
+    if combined_score >= 75:
+        recommendation = "🟢 Strong Hire"
+    elif combined_score >= 60:
+        recommendation = "🟡 Mid Hire"
+    else:
+        recommendation = "🔴 No Hire"
     
     return {
         "candidate_name": candidate_name,
-        "supabase_score": supabase_score,
-        "key_strengths": [],
-        "key_gaps": [],
-        "final_recommendation": "Good Match" if supabase_score >= 70 else "Moderate Match" if supabase_score >= 50 else "Needs Review"
+        "tfidf_score": tfidf_score,
+        "skill_match": round(skill_match, 2),
+        "combined_score": round(combined_score, 2),
+        "recommendation": recommendation,
+        "key_strengths": [s.title() for s in list(strengths)[:5]],
+        "key_gaps": [s.title() for s in list(gaps)[:5]],
+        "total_required_skills": len(jd_tech_skills),
+        "matched_skills": len(strengths)
     }
 
 def compute_hybrid_score(bert_score: int, supabase_score: int) -> int:
-    """Calculate hybrid score: 40% BERT + 60% Supabase"""
+    """Calculate hybrid score: 60% TF-IDF + 40% Skill Match"""
     return int(round(BERT_WEIGHT * bert_score + GEMINI_WEIGHT * supabase_score))
 
 @app.route("/screen", methods=["POST"])
@@ -242,21 +310,19 @@ def screen():
                     continue
                 
                 filename = file.filename.rsplit(".", 1)[0]
-                supabase_result = screen_with_supabase(jd, resume_text, filename)
-                
-                bert_score = compute_bert_score(jd, resume_text)
-                supabase_score = supabase_result.get("supabase_score", bert_score)
-                hybrid_score = compute_hybrid_score(bert_score, supabase_score)
+                screening_result = screen_resume(jd, resume_text, filename)
                 
                 results.append({
                     "filename": file.filename,
-                    "candidate_name": supabase_result["candidate_name"],
-                    "bert_score": bert_score,
-                    "supabase_score": supabase_score,
-                    "hybrid_score": hybrid_score,
-                    "recommendation": supabase_result["final_recommendation"],
-                    "strengths": supabase_result["key_strengths"],
-                    "gaps": supabase_result["key_gaps"]
+                    "candidate_name": screening_result["candidate_name"],
+                    "tfidf_score": screening_result["tfidf_score"],
+                    "skill_match": screening_result["skill_match"],
+                    "combined_score": screening_result["combined_score"],
+                    "recommendation": screening_result["recommendation"],
+                    "strengths": screening_result["key_strengths"],
+                    "gaps": screening_result["key_gaps"],
+                    "matched_skills": screening_result["matched_skills"],
+                    "total_required_skills": screening_result["total_required_skills"]
                 })
             
             except Exception as e:
@@ -271,13 +337,11 @@ def screen():
                 "details": errors
             }), 500
         
-        results.sort(key=lambda x: x["hybrid_score"], reverse=True)
+        results.sort(key=lambda x: x["combined_score"], reverse=True)
         
         return jsonify({
             "success": True,
             "total": len(results),
-            "weights": {"bert": BERT_WEIGHT, "supabase": GEMINI_WEIGHT},
-            "mode": "hybrid",
             "errors": errors,
             "results": results
         })

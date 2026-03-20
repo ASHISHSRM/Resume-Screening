@@ -19,18 +19,29 @@ document.getElementById("screen_btn").addEventListener("click", screenResumes);
 document.getElementById("export_csv_btn").addEventListener("click", exportCSV);
 document.getElementById("export_excel_btn").addEventListener("click", exportExcel);
 
+// File count display
+document.getElementById("resume_files").addEventListener("change", function() {
+    const fileCount = this.files.length;
+    const fileCountDiv = document.getElementById("file-count");
+    if (fileCount > 0) {
+        fileCountDiv.innerHTML = `<i class="fas fa-check-circle text-success"></i> <strong>${fileCount}</strong> file(s) selected`;
+    } else {
+        fileCountDiv.innerHTML = "";
+    }
+});
+
 async function screenResumes() {
     const jdFile = document.getElementById("jd_file").files[0];
     const jdText = document.getElementById("jd_text").value.trim();
     const resumeFiles = document.getElementById("resume_files").files;
 
     if (!jdFile && !jdText) {
-        alert("⚠️ Please provide a job description (file or text)");
+        showAlert("Please provide a job description (file or text)", "warning");
         return;
     }
 
     if (resumeFiles.length === 0) {
-        alert("⚠️ Please select at least one resume");
+        showAlert("Please select at least one resume", "warning");
         return;
     }
 
@@ -77,59 +88,139 @@ async function screenResumes() {
         }
     } catch (error) {
         console.error("Error:", error);
-        alert(`❌ Failed to screen resumes: ${error.message}`);
+        showAlert(`Failed to screen resumes: ${error.message}`, "danger");
     } finally {
         document.getElementById("loading").style.display = "none";
     }
 }
 
-function displayResults(data) {
-    const html = `
-        <div class="alert alert-info">
-            <strong>Total Processed:</strong> ${data.total} | 
-            <strong>Weights:</strong> TF-IDF ${(data.weights.bert * 100).toFixed(0)}% + Supabase ${(data.weights.supabase * 100).toFixed(0)}%
+function showAlert(message, type = "info") {
+    const alertIcon = {
+        "info": "fa-info-circle",
+        "warning": "fa-exclamation-triangle",
+        "danger": "fa-times-circle",
+        "success": "fa-check-circle"
+    };
+    
+    const alertHtml = `
+        <div class="alert alert-${type} alert-dismissible fade show" role="alert">
+            <i class="fas ${alertIcon[type]}"></i> ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
-        <table class="table table-striped table-hover">
-            <thead class="table-dark">
-                <tr>
-                    <th>Rank</th>
-                    <th>Candidate</th>
-                    <th>Filename</th>
-                    <th>TF-IDF Score</th>
-                    <th>Supabase Score</th>
-                    <th>Hybrid Score</th>
-                    <th>Recommendation</th>
-                </tr>
-            </thead>
-            <tbody>
-                ${data.results.map((result, idx) => `
+    `;
+    
+    const resultsSection = document.getElementById("results_section");
+    if (resultsSection && resultsSection.style.display !== "none") {
+        resultsSection.insertAdjacentHTML("afterbegin", alertHtml);
+    }
+}
+
+function displayResults(data) {
+    // Summary section
+    const strongHires = data.results.filter(r => r.recommendation.includes("Strong Hire")).length;
+    const midHires = data.results.filter(r => r.recommendation.includes("Mid Hire")).length;
+    const noHires = data.results.filter(r => r.recommendation.includes("No Hire")).length;
+    
+    const summaryHtml = `
+        <div class="row mb-4">
+            <div class="col-md-4">
+                <div class="summary-card">
+                    <div class="summary-icon success">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                    <div class="summary-content">
+                        <h6>Strong Hire</h6>
+                        <p>${strongHires}</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="summary-card">
+                    <div class="summary-icon warning">
+                        <i class="fas fa-exclamation-circle"></i>
+                    </div>
+                    <div class="summary-content">
+                        <h6>Mid Hire</h6>
+                        <p>${midHires}</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="summary-card">
+                    <div class="summary-icon danger">
+                        <i class="fas fa-times-circle"></i>
+                    </div>
+                    <div class="summary-content">
+                        <h6>No Hire</h6>
+                        <p>${noHires}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.getElementById("results_summary").innerHTML = summaryHtml;
+    
+    // Results table
+    const tableHtml = `
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
                     <tr>
-                        <td><strong>#${idx + 1}</strong></td>
-                        <td>${result.candidate_name}</td>
-                        <td>${result.filename}</td>
-                        <td><span class="badge bg-primary">${result.bert_score}</span></td>
-                        <td><span class="badge bg-success">${result.supabase_score}</span></td>
-                        <td><span class="badge bg-danger" style="font-size: 1.1em; padding: 0.5em 0.8em;">${result.hybrid_score}</span></td>
-                        <td>${getRecommendationBadge(result.recommendation)}</td>
+                        <th style="width: 8%;">Rank</th>
+                        <th style="width: 15%;">Candidate</th>
+                        <th style="width: 10%;">TF-IDF</th>
+                        <th style="width: 12%;">Skill Match</th>
+                        <th style="width: 12%;">Score</th>
+                        <th style="width: 15%;">Recommendation</th>
+                        <th style="width: 10%;">Skills</th>
+                        <th>Details</th>
                     </tr>
-                `).join("")}
-            </tbody>
-        </table>
-        ${data.errors.length > 0 ? `
-            <div class="alert alert-warning">
-                <strong>Errors:</strong>
-                <ul>
+                </thead>
+                <tbody>
+                    ${data.results.map((result, idx) => `
+                        <tr>
+                            <td><strong>#${idx + 1}</strong></td>
+                            <td><strong>${result.candidate_name}</strong></td>
+                            <td><span class="badge bg-info">${result.tfidf_score}</span></td>
+                            <td><span class="badge bg-primary">${result.skill_match}%</span></td>
+                            <td><span class="badge bg-secondary" style="font-size: 1.05em;">${result.combined_score.toFixed(1)}</span></td>
+                            <td>${getRecommendationBadge(result.recommendation)}</td>
+                            <td><small><strong>${result.matched_skills}/${result.total_required_skills}</strong></small></td>
+                            <td>
+                                <small>
+                                    <strong>Strengths:</strong> ${result.strengths.length > 0 ? result.strengths.join(", ") : "None"}<br>
+                                    <strong>Gaps:</strong> ${result.gaps.length > 0 ? result.gaps.slice(0, 3).join(", ") : "Complete match"}
+                                </small>
+                            </td>
+                        </tr>
+                    `).join("")}
+                </tbody>
+            </table>
+        </div>
+        ${data.errors && data.errors.length > 0 ? `
+            <div class="alert alert-warning mt-4">
+                <strong><i class="fas fa-exclamation-triangle"></i> Processing Errors:</strong>
+                <ul class="mb-0 mt-2">
                     ${data.errors.map(err => `<li>${err}</li>`).join("")}
                 </ul>
             </div>
         ` : ""}
     `;
-    document.getElementById("results_table").innerHTML = html;
+    
+    document.getElementById("results_table").innerHTML = tableHtml;
 }
 
 function getRecommendationBadge(recommendation) {
-    const badgeClass = recommendation === "Good Match" ? "bg-success" : recommendation === "Moderate Match" ? "bg-warning" : "bg-danger";
-    return `<span class="badge ${badgeClass}">${recommendation}</span>`;
+    if (recommendation.includes("Strong Hire")) {
+        return `<span class="badge bg-success"><i class="fas fa-check-circle"></i> Strong Hire</span>`;
+    } else if (recommendation.includes("Mid Hire")) {
+        return `<span class="badge bg-warning"><i class="fas fa-exclamation-circle"></i> Mid Hire</span>`;
+    } else if (recommendation.includes("No Hire")) {
+        return `<span class="badge bg-danger"><i class="fas fa-times-circle"></i> No Hire</span>`;
+    } else {
+        return `<span class="badge bg-secondary">Unknown</span>`;
+    }
 }
 
 function exportCSV() {
@@ -138,15 +229,17 @@ function exportCSV() {
         return;
     }
 
-    const headers = ["Rank", "Candidate", "Filename", "TF-IDF Score", "Supabase Score", "Hybrid Score", "Recommendation"];
+    const headers = ["Rank", "Candidate", "TF-IDF Score", "Skill Match %", "Combined Score", "Recommendation", "Matched Skills", "Strengths", "Gaps"];
     const rows = screeningResults.map((result, idx) => [
         idx + 1,
         result.candidate_name,
-        result.filename,
-        result.bert_score,
-        result.supabase_score,
-        result.hybrid_score,
-        result.recommendation
+        result.tfidf_score,
+        result.skill_match,
+        result.combined_score.toFixed(1),
+        result.recommendation,
+        `${result.matched_skills}/${result.total_required_skills}`,
+        result.strengths.join("; "),
+        result.gaps.join("; ")
     ]);
 
     const csv = [headers, ...rows].map(row => row.map(cell => `"${cell}"`).join(",")).join("\n");
@@ -172,11 +265,13 @@ function exportExcel() {
     const data = screeningResults.map((result, idx) => ({
         "Rank": idx + 1,
         "Candidate": result.candidate_name,
-        "Filename": result.filename,
-        "TF-IDF Score": result.bert_score,
-        "Supabase Score": result.supabase_score,
-        "Hybrid Score": result.hybrid_score,
-        "Recommendation": result.recommendation
+        "TF-IDF Score": result.tfidf_score,
+        "Skill Match %": result.skill_match,
+        "Combined Score": result.combined_score.toFixed(1),
+        "Recommendation": result.recommendation,
+        "Matched Skills": `${result.matched_skills}/${result.total_required_skills}`,
+        "Strengths": result.strengths.join("; "),
+        "Gaps": result.gaps.join("; ")
     }));
 
     const ws = XLSX.utils.json_to_sheet(data);
